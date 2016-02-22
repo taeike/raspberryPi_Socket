@@ -1,165 +1,93 @@
-#include "tstlib.h"
+#include <sys/socket.h>
+#include <sys/stat.h>
+#include <arpa/inet.h>
+#include <stdio.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <errno.h>
+#include <stdlib.h>
 
-#define LISTEN_BLOCK 20	// 한번에 20개의 접속 요청 처리
-#define THIS_IP "192.168.10.40" 
-// IP는 각자 Pi 에 지정한 것을 사용한다. 난 192.168.10.40 이다. 고정 IP로 사용하는게
-// 정신건강에 좋다.
+#define PORT	7777
+#define MAXBUF	1024 /* 클라이언트와 길이를 맞추어준다. */
+int main(int argc, char **argv) {
+	int server_sockfd, client_sockfd; // 소켓
+	int client_len, n;
+	int file_read_len;
+	char buf[MAXBUF];
+	char file_name[MAXBUF];
+	struct sockaddr_in clientaddr, serveraddr;
+	int source_fd; // 파일 번호
+	int chk_bind; // 연결 확인 변수
+	int chk_write;
+	int read_len;
 
-void setGpio(int pino, int value);
+	client_len = sizeof(clientaddr);
 
-main()
-{
-	int	sock, ret, c_fd;
-
-	int	c_sock_size;
-	int	rec_len;
-	int	m_sw = 0;
-
-	char	recv_buf[1024];
-	char	send_buf[1024];
-	
-	struct sockaddr_in serv_sock;
-	struct sockaddr_in c_sock;
-
-	c_sock_size = sizeof(struct sockaddr);
-
-	printf("Initialze GPIO Socket Server.....................\r");
-	fflush(stdout);
-	printf("wiringPi Setup........................\n");
-	sleep(2);
-	if(wiringPiSetup() == -1)	{
-		printf("GPIO Setup error\n");
+	/* socket() */
+	server_sockfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+	if(server_sockfd == -1) {
+		perror("socket error : ");
 		exit(0);
 	}
 
-	sock = socket(AF_INET, SOCK_STREAM, 0);
-	if(sock == -1)	{
-		switch(errno)	{
-			case EAFNOSUPPORT :
-				printf("이 버전에서는 특정 주소 집합을 지원하지 않습니다.\n");
-				//printf("구현버전에서  특정주소 집합(address family)를 지원하지 않는다.\n");
-				break;
-			case EMFILE :
-				printf("현재 프로세스는 FD(File Descriptor)를 생성 할 수 없습니다.\n");
-				//printf("해당 프로세스에서 더이상 파일 디스크립터(file descriptor)를 생성할 수 없다..\n");
-				break;
-			case ENFILE :
-				printf("시스템에서 FD(File Descriptor)를 생성할 수 없습니다\n");
-				//printf("시스템에서 더이상 파일 디스크립터를 생성할 수 없다.\n");
-				break;
-			case EPROTONOSUPPORT :
-				printf("현재 버전은 지원하지 않는 프로토콜 입니다.\n");
-				//printf("주소집합 혹은 구현버전에서 지원하지 않는 프로토콜이다.\n");
-				break;
-			case EPROTOTYPE :
-				printf("프로토복이 지원하지 않는 소켓 타입 입니다|n");
-				//printf("프로토콜에서 지원하지 않는 소켓 타입이다.\n");
-				break;
-		}
-		printf("Socket createion error\n");
+	/* bind() */
+	bzero(&serveraddr, sizeof(serveraddr)); // 해당 메모리 영역 초기화
+	serveraddr.sin_family = AF_INET;
+	serveraddr.sin_addr.s_addr = htonl(INADDR_ANY);
+	serveraddr.sin_port = htons(PORT);
+
+	chk_bind = bind(server_sockfd, (struct sockaddr *)&serveraddr, sizeof(serveraddr));
+	if(chk_bind > 0) {
+		perror("bind error : ");
 		exit(0);
-		// 혹은 오류시 처리할 내용을 넣어준다.
 	}
-	// socket 이 이제 준비 되었으니
-	serv_sock.sin_family = AF_INET;
-	serv_sock.sin_addr.s_addr = inet_addr(THIS_IP);
-	serv_sock.sin_port = htons(6666);
-	bzero(&(serv_sock.sin_zero), 8);
-	
-	ret = bind(sock, (struct sockaddr *)&serv_sock, sizeof(serv_sock));
-	if(ret < 0) {
-		printf("Bind 시 오류 발생 : (%d)\n", errno);
-		exit(1);
+
+	/* listen() */
+	if(listen(server_sockfd, 5)) {
+		perror("listen error : ");
 	}
-	
-	// bind 가 성공 했으면 그냥 listen 을 하면 접속 대기 상태로 들어간다.
-	printf("GPIO Server Start.............\n");
-	while(1)	{
-		ret = listen(sock, LISTEN_BLOCK);
-		if(ret < 0) {
-		    printf("listen(serv_fd, LISTEN_BLOCK) Error...\n");
-		    return(ret);
-		}
-	
-		c_fd = accept(sock, (struct sockaddr *)&c_sock, &c_sock_size);
-	
-		printf("connect IP : (%s)\n", inet_ntoa(c_sock.sin_addr));
-	
-		while(1)	{
-			memset(recv_buf, 0x00, 1024);
-			memset(send_buf, 0x00, 1024);
-			if(c_fd == -1)	{
-				printf("client connect error...\n");
-				break;
-			}
-	
-			rec_len = recv(c_fd, (char *)recv_buf,sizeof(recv_buf), 0);
-			if(rec_len < 1)	{
-				//printf("receive length error \n");
-				printf("client disconnected...\n");
-				break;
-			}
 
-			if(strncmp(recv_buf, "/exit", 5) == 0)	{
-				printf("Client request exit server message ...\n");
-				printf("disconnect & server down....\n");
-				strcpy(send_buf, "I'm going down your request...\n");
-				send(c_fd, (char *)&send_buf, strlen(send_buf), 0);
-				m_sw = 1;
-				break;
-			}
-			recv_buf[rec_len - 1] = 0x00;
-			printf("Receive : [%s]\n", recv_buf);
-			GPIO_CONTROL(recv_buf, c_fd);
-
-			recv_buf[rec_len - 1] = 0x00;
-			send(c_fd, (char *)&send_buf, strlen(send_buf), 0);
-		}
-		if(m_sw == 1)
+	/* 클라이언트 연결 대기 */
+	while(1) {
+		memset(buf, 0x00, MAXBUF);
+		/* accept() */
+		client_sockfd = accept(server_sockfd, (struct sockaddr *)&clientaddr, &client_len);
+		printf("New Client Connect: %s\n", inet_ntoa(clientaddr.sin_addr));
+		
+		/* 파일명 받기 */
+		read_len = read(client_sockfd, buf, MAXBUF);
+		if(read_len > 0) {
+		    memset(file_name, 0x00, MAXBUF);
+			strcpy(file_name, buf);
+			printf("%s > %s\n", inet_ntoa(clientaddr.sin_addr), file_name);
+		} else {
+			close(client_sockfd);
 			break;
+		}
+
+		/* 파일 열기  */
+		source_fd = open(file_name, O_RDONLY); 
+		if(!source_fd) {
+			perror("file open error : ");
+			break ;
+		}
+		printf("before while\n");
+		while(1) {
+			memset(buf, 0x00, MAXBUF);
+			file_read_len = read(source_fd, buf, MAXBUF);
+			printf("\nread : %s",buf); 
+			chk_write = write(client_sockfd, buf, MAXBUF);
+			if(file_read_len == EOF | file_read_len == 0) {
+				printf("finish file\n");
+				break;
+			}
+		}
+		close(client_sockfd);
+		close(source_fd);
 	}
-	close(sock);
-	sleep(2);
-}
-/** ---------------------------------------------------------------------- **/
-GPIO_CONTROL(char *ControlStr)
-{
-	int	gpio_rst;
-	char	Head[128];
-	char	Tail[128];
-
-	memset(Head, 0x00, sizeof(Head));
-	memset(Tail, 0x00, sizeof(Tail));
-	
-	char	c_pino[10],	c_mode[10], c_value[10];
-	int	i_pino, i_mode, i_value;
-
-	fnToken(ControlStr, Head, Tail, ',');
-	strcpy(c_pino, Head);
-
-	fnToken(Tail, Head, Tail, ',');
-	strcpy(c_mode, Head);
-
-	strcpy(c_value, Tail);
-
-
-	i_pino = atoi(c_pino);
-	i_mode = atoi(c_mode);
-	i_value = atoi(c_value);
-
-/**	debug
-	printf("Pi No : [%s][%d]\n", c_pino, i_pino);
-	printf("Mode  : [%s][%d]\n", c_mode, i_mode);
-	printf("Value : [%s][%d]\n", c_value, i_value);
-	gpio_rst = GPIOFnc[i_pino].FuncPnt(i_value);
-**/
-	setGpio(i_pino, i_value);
-
-}
-
-void setGpio(int pino, int value)
-{
-    printf("Pin : %d, Value : %d\n", 4, value);
-    pinMode(pino, OUTPUT);
-    digitalWrite(pino, value);
+	close(server_sockfd);
+	return 0;
 }
